@@ -1,14 +1,14 @@
 [Unit]
-Description=Telegram userbot with Gemini replies
+Description=Telegram userbot with Groq replies
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/opt/SpotShort/telegram_userbot
-EnvironmentFile=/opt/SpotShort/telegram_userbot/.env
-ExecStart=/opt/SpotShort/telegram_userbot/.venv/bin/python /opt/SpotShort/telegram_userbot/main.py
+WorkingDirectory=/opt/AutoBot/telegram_userbot
+EnvironmentFile=/opt/AutoBot/telegram_userbot/.env
+ExecStart=/opt/AutoBot/telegram_userbot/.venv/bin/python /opt/AutoBot/telegram_userbot/main.py
 Restart=always
 RestartSec=10
 NoNewPrivileges=true

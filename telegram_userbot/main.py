@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from typing import Deque
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from groq import Groq
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 
@@ -31,11 +30,11 @@ def required_env(name: str) -> str:
 API_ID = int(required_env("TG_API_ID"))
 API_HASH = required_env("TG_API_HASH")
 SESSION_NAME = os.getenv("TG_SESSION_NAME", "telegram_userbot")
-GEMINI_API_KEY = required_env("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GROQ_API_KEY = required_env("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
-    """Ти відповідаєш у Telegram від імені власника акаунта. Пиши природно, коротко і по суті, українською мовою, якщо співрозмовник не використовує іншу мову. Не вигадуй фактів. Не згадуй, що ти AI, якщо це не потрібно для чесної відповіді. Не обіцяй зустрічей, оплат, юридичних чи фінансових дій від імені власника. Якщо запит потребує рішення власника, скажи, що він відповість пізніше.""",
+    """Ти відповідаєш у Telegram від імені власника акаунта. Відповідай лише на останнє повідомлення співрозмовника. Пиши природно, коротко і по суті мовою співрозмовника. Не додавай службових пояснень, внутрішніх міркувань, лапок або markdown. Не вигадуй фактів. Не обіцяй зустрічей, оплат, юридичних чи фінансових дій від імені власника. Якщо запит потребує рішення власника, скажи, що він відповість пізніше.""",
 )
 
 
@@ -105,24 +104,24 @@ def build_prompt(chat_id: int, incoming_text: str) -> str:
 
 async def generate_reply(chat_id: int, incoming_text: str) -> str:
     prompt = build_prompt(chat_id, incoming_text[:MAX_INPUT_CHARS])
-    logger.info("GEMINI_REQUEST chat_id=%s model=%s input_chars=%s", chat_id, GEMINI_MODEL, len(incoming_text))
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    logger.info("GROQ_REQUEST chat_id=%s model=%s input_chars=%s", chat_id, GROQ_MODEL, len(incoming_text))
+    client = Groq(api_key=GROQ_API_KEY)
 
-    def call_gemini():
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.7,
-                max_output_tokens=500,
-            ),
+    def call_groq() -> str:
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=500,
         )
-        return (response.text or "").strip()
+        return (completion.choices[0].message.content or "").strip()
 
-    reply = await asyncio.to_thread(call_gemini)
+    reply = await asyncio.to_thread(call_groq)
     result = reply[:MAX_OUTPUT_CHARS].strip()
-    logger.info("GEMINI_RESPONSE chat_id=%s output_chars=%s empty=%s", chat_id, len(result), not bool(result))
+    logger.info("GROQ_RESPONSE chat_id=%s output_chars=%s empty=%s", chat_id, len(result), not bool(result))
     return result
 
 
@@ -148,7 +147,7 @@ async def handle_message(event: events.NewMessage.Event) -> None:
         try:
             reply = await generate_reply(chat_id, incoming_text)
             if not reply:
-                logger.warning("Gemini returned an empty response for chat %s", chat_id)
+                logger.warning("Groq returned an empty response for chat %s", chat_id)
                 return
 
             await asyncio.sleep(REPLY_DELAY_SECONDS)
@@ -166,7 +165,7 @@ async def handle_message(event: events.NewMessage.Event) -> None:
 
 
 async def main() -> None:
-    logger.info("Starting Telegram userbot with model %s", GEMINI_MODEL)
+    logger.info("Starting Telegram userbot with Groq model %s", GROQ_MODEL)
     logger.info(
         "CONFIG allowed_chat_ids=%s allow_groups=%s cooldown=%s delay=%s",
         sorted(ALLOWED_CHAT_IDS),
