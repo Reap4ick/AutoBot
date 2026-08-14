@@ -70,14 +70,27 @@ states: dict[int, ChatState] = defaultdict(
 
 
 def is_allowed(event: events.NewMessage.Event) -> bool:
-    if event.sender_id is None or not event.raw_text.strip():
+    text = (event.raw_text or "").strip()
+    logger.info(
+        "INCOMING chat_id=%s private=%s sender_id=%s text=%r",
+        event.chat_id,
+        event.is_private,
+        event.sender_id,
+        text[:200],
+    )
+    if event.sender_id is None or not text:
+        logger.info("SKIP reason=empty_or_missing_sender chat_id=%s", event.chat_id)
         return False
-    if event.raw_text.lstrip().startswith("/"):
+    if text.startswith("/"):
+        logger.info("SKIP reason=command chat_id=%s", event.chat_id)
         return False
     if ALLOWED_CHAT_IDS and event.chat_id not in ALLOWED_CHAT_IDS:
+        logger.info("SKIP reason=chat_not_allowed chat_id=%s allowed=%s", event.chat_id, sorted(ALLOWED_CHAT_IDS))
         return False
     if not ALLOWED_CHAT_IDS and not event.is_private and not ALLOW_GROUPS:
+        logger.info("SKIP reason=groups_disabled chat_id=%s", event.chat_id)
         return False
+    logger.info("ACCEPT chat_id=%s", event.chat_id)
     return True
 
 
@@ -92,6 +105,7 @@ def build_prompt(chat_id: int, incoming_text: str) -> str:
 
 async def generate_reply(chat_id: int, incoming_text: str) -> str:
     prompt = build_prompt(chat_id, incoming_text[:MAX_INPUT_CHARS])
+    logger.info("GEMINI_REQUEST chat_id=%s model=%s input_chars=%s", chat_id, GEMINI_MODEL, len(incoming_text))
     client = genai.Client(api_key=GEMINI_API_KEY)
 
     def call_gemini():
@@ -107,7 +121,9 @@ async def generate_reply(chat_id: int, incoming_text: str) -> str:
         return (response.text or "").strip()
 
     reply = await asyncio.to_thread(call_gemini)
-    return reply[:MAX_OUTPUT_CHARS].strip()
+    result = reply[:MAX_OUTPUT_CHARS].strip()
+    logger.info("GEMINI_RESPONSE chat_id=%s output_chars=%s empty=%s", chat_id, len(result), not bool(result))
+    return result
 
 
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
@@ -119,6 +135,7 @@ async def handle_message(event: events.NewMessage.Event) -> None:
         return
 
     chat_id = event.chat_id
+    logger.info("HANDLER_START chat_id=%s", chat_id)
     state = states[chat_id]
     async with state.lock:
         now = time.monotonic()
@@ -135,7 +152,9 @@ async def handle_message(event: events.NewMessage.Event) -> None:
                 return
 
             await asyncio.sleep(REPLY_DELAY_SECONDS)
+            logger.info("TELEGRAM_SEND chat_id=%s text=%r", chat_id, reply[:200])
             await event.reply(reply)
+            logger.info("TELEGRAM_SENT chat_id=%s", chat_id)
             state.history.append(f"Співрозмовник: {incoming_text}")
             state.history.append(f"Власник: {reply}")
             state.last_reply_at = time.monotonic()
@@ -148,6 +167,13 @@ async def handle_message(event: events.NewMessage.Event) -> None:
 
 async def main() -> None:
     logger.info("Starting Telegram userbot with model %s", GEMINI_MODEL)
+    logger.info(
+        "CONFIG allowed_chat_ids=%s allow_groups=%s cooldown=%s delay=%s",
+        sorted(ALLOWED_CHAT_IDS),
+        ALLOW_GROUPS,
+        COOLDOWN_SECONDS,
+        REPLY_DELAY_SECONDS,
+    )
     await client.start()
     me = await client.get_me()
     logger.info("Logged in as %s (id=%s)", me.username or me.first_name, me.id)
